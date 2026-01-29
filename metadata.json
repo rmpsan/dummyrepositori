@@ -1,0 +1,5 @@
+{
+  "name": "Dummy Filmes Manager",
+  "description": "A centralized project management platform for video editing workflows, featuring hour tracking, version control, and role-based dashboards.",
+  "requestFramePermissions": []
+}
