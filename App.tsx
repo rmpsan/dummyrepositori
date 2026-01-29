@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { MOCK_USERS, MOCK_PROJECTS } from './constants';
 import { Project, User, Role, ToastNotification } from './types';
 import { Dashboard } from './components/Dashboard';
 import { ProjectDetails } from './components/ProjectDetails';
@@ -9,56 +8,79 @@ import { Settings } from './components/Settings';
 import { Login } from './components/Login';
 import { Register } from './components/Register';
 import { ToastContainer } from './components/Toast';
-import { Film, Users, LogOut, Settings as SettingsIcon, BarChart2 } from 'lucide-react';
+import { Film, Users, LogOut, Settings as SettingsIcon, BarChart2, Loader2 } from 'lucide-react';
+import { supabase } from './supabaseClient';
+import { api } from './services/api';
 
 type ViewState = 'login' | 'register' | 'dashboard' | 'project-details' | 'project-form' | 'team' | 'settings';
 
 const App: React.FC = () => {
-  // Global State with Persistence
-  const [users, setUsers] = useState<User[]>(() => {
-    const saved = localStorage.getItem('dummy_users');
-    return saved ? JSON.parse(saved) : MOCK_USERS;
-  });
-
-  const [projects, setProjects] = useState<Project[]>(() => {
-    const saved = localStorage.getItem('dummy_projects');
-    return saved ? JSON.parse(saved) : MOCK_PROJECTS;
-  });
+  // Global State
+  const [users, setUsers] = useState<User[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   
   // Auth State
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('dummy_current_user');
-    return saved ? JSON.parse(saved) : null;
-  });
-
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string>('');
   
   // Navigation State
-  const [view, setView] = useState<ViewState>(() => {
-    return localStorage.getItem('dummy_current_user') ? 'dashboard' : 'login';
-  });
-  
+  const [view, setView] = useState<ViewState>('login');
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
 
   // Notification State
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
-  // --- Persistence Effects ---
+  // --- Initial Data Loading ---
+  
   useEffect(() => {
-    localStorage.setItem('dummy_users', JSON.stringify(users));
-  }, [users]);
+    // Check active session
+    const initSession = async () => {
+      const user = await api.getCurrentUser();
+      if (user) {
+        setCurrentUser(user);
+        setView('dashboard');
+        await loadData();
+      }
+      setAuthLoading(false);
+    };
 
-  useEffect(() => {
-    localStorage.setItem('dummy_projects', JSON.stringify(projects));
-  }, [projects]);
+    initSession();
 
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('dummy_current_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('dummy_current_user');
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setCurrentUser(null);
+        setView('login');
+        setProjects([]);
+        setUsers([]);
+      } else if (event === 'SIGNED_IN' && session) {
+        // Need to wait a bit for profile creation triggers if any, or fetch manually
+        const user = await api.getCurrentUser();
+        if (user) {
+             setCurrentUser(user);
+             setView('dashboard');
+             await loadData();
+        }
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      const [fetchedProjects, fetchedUsers] = await Promise.all([
+        api.getProjects(),
+        api.getUsers()
+      ]);
+      setProjects(fetchedProjects);
+      setUsers(fetchedUsers);
+    } catch (error) {
+      console.error(error);
+      addToast('error', 'Erro ao carregar dados do servidor.');
     }
-  }, [currentUser]);
+  };
 
   // --- Toast Handlers ---
   const addToast = (type: 'success' | 'error' | 'info', message: string) => {
@@ -72,92 +94,106 @@ const App: React.FC = () => {
 
   // --- Auth Handlers ---
 
-  const handleLogin = (email: string, pass: string) => {
-    const user = users.find(u => u.email === email && u.password === pass);
-    if (user) {
-      setCurrentUser(user);
-      setAuthError('');
-      setView('dashboard');
-      addToast('success', `Bem-vindo, ${user.name.split(' ')[0]}!`);
-    } else {
-      setAuthError('Email ou senha inválidos.');
+  const handleLogin = async (email: string, pass: string) => {
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password: pass,
+      });
+
+      if (error) throw error;
+      // Auth state listener will handle the rest
+      addToast('success', 'Login realizado com sucesso!');
+    } catch (error: any) {
+      setAuthError(error.message || 'Erro no login.');
       addToast('error', 'Falha no login. Verifique suas credenciais.');
     }
   };
 
-  const handleRegister = (name: string, email: string, pass: string, role: Role) => {
-    // Check if email exists
-    if (users.some(u => u.email === email)) {
-      addToast('error', 'Este email já está cadastrado.');
-      return;
+  const handleRegister = async (name: string, email: string, pass: string, role: Role) => {
+    try {
+      // 1. Create Auth User
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password: pass,
+      });
+
+      if (error) throw error;
+
+      if (data.user) {
+        // 2. Create Profile
+        const newUser: User = {
+            id: data.user.id,
+            name,
+            email,
+            role,
+            avatar: `https://ui-avatars.com/api/?name=${name.replace(' ', '+')}&background=random&color=fff`
+        };
+        
+        await api.createUserProfile(newUser);
+        addToast('success', 'Conta criada! Você já pode entrar.');
+        // If auto-confirm is on in Supabase, they are logged in.
+        // If email confirm is on, they need to check email. Assuming auto-confirm for this prototype.
+      }
+    } catch (error: any) {
+      console.error(error);
+      addToast('error', error.message || 'Erro ao criar conta.');
     }
-
-    const newUser: User = {
-      id: `u${Date.now()}`,
-      name,
-      email,
-      password: pass,
-      role,
-      avatar: `https://ui-avatars.com/api/?name=${name.replace(' ', '+')}&background=random&color=fff`
-    };
-
-    setUsers([...users, newUser]);
-    setCurrentUser(newUser);
-    setView('dashboard');
-    addToast('success', 'Conta criada com sucesso!');
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setSelectedProject(null);
-    setView('login');
-    setAuthError('');
-    localStorage.removeItem('dummy_current_user');
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     addToast('info', 'Você saiu do sistema.');
   };
 
   // --- Team Management Handlers ---
 
-  const handleAddUser = (name: string, email: string, role: Role) => {
-    if (users.some(u => u.email === email)) {
-      addToast('error', 'Email já cadastrado.');
-      return;
-    }
-    const newUser: User = {
-      id: `u${Date.now()}`,
-      name,
-      email,
-      password: '123', // Default password
-      role,
-      avatar: `https://ui-avatars.com/api/?name=${name.replace(' ', '+')}&background=random&color=fff`
-    };
-    setUsers([...users, newUser]);
-    addToast('success', `${name} adicionado(a) à equipe! Senha padrão: 123`);
+  const handleAddUser = async (name: string, email: string, role: Role) => {
+    // Note: Creating a user via API usually requires admin privileges or specific edge functions.
+    // For this prototype, we'll simulate the "Invitation" by just showing a toast
+    // telling the user to Register.
+    // In a real app, you would use supabase.auth.admin.inviteUserByEmail (requires service role key).
+    
+    addToast('info', 'Para adicionar um membro, peça para ele se cadastrar na tela de login com este email.');
   };
 
-  const handleDeleteUser = (userId: string) => {
+  const handleDeleteUser = async (userId: string) => {
     if (window.confirm('Remover este usuário da equipe?')) {
-      setUsers(users.filter(u => u.id !== userId));
-      // Optional: Remove user from assigned projects
-      addToast('success', 'Usuário removido.');
+        try {
+            await api.deleteUser(userId);
+            setUsers(users.filter(u => u.id !== userId));
+            addToast('success', 'Usuário removido da lista de perfis.');
+        } catch (e) {
+            addToast('error', 'Erro ao remover usuário.');
+        }
     }
   };
 
   // --- User Profile Handlers ---
 
-  const handleUpdateProfile = (name: string, password?: string) => {
+  const handleUpdateProfile = async (name: string, password?: string) => {
     if (!currentUser) return;
     
-    const updatedUser = {
-        ...currentUser,
-        name,
-        avatar: `https://ui-avatars.com/api/?name=${name.replace(' ', '+')}&background=random&color=fff`,
-        ...(password ? { password } : {})
-    };
+    try {
+        const updates = {
+            name,
+            avatar: `https://ui-avatars.com/api/?name=${name.replace(' ', '+')}&background=random&color=fff`
+        };
 
-    setUsers(users.map(u => u.id === currentUser.id ? updatedUser : u));
-    setCurrentUser(updatedUser);
-    addToast('success', 'Perfil atualizado com sucesso!');
+        await api.updateUserProfile(currentUser.id, updates);
+
+        if (password) {
+            await supabase.auth.updateUser({ password });
+        }
+
+        const updatedUser = { ...currentUser, ...updates };
+        setCurrentUser(updatedUser);
+        setUsers(users.map(u => u.id === currentUser.id ? updatedUser : u));
+        
+        addToast('success', 'Perfil atualizado com sucesso!');
+    } catch (e) {
+        addToast('error', 'Erro ao atualizar perfil.');
+    }
   };
 
   // --- Navigation Handlers ---
@@ -167,18 +203,17 @@ const App: React.FC = () => {
     setView('project-details');
   };
 
-  const handleBackToDashboard = () => {
+  const handleBackToDashboard = async () => {
     setSelectedProject(null);
     setView('dashboard');
+    await loadData(); // Refresh data
   };
 
-  // Open Form to Create New
   const handleNewProjectClick = () => {
-    setSelectedProject(null); // No project selected means "New"
+    setSelectedProject(null);
     setView('project-form');
   };
 
-  // Open Form to Edit
   const handleEditProjectClick = (project: Project) => {
     setSelectedProject(project);
     setView('project-form');
@@ -186,37 +221,61 @@ const App: React.FC = () => {
 
   // --- Data Logic ---
 
-  const handleUpdateProject = (updatedProject: Project) => {
-    const updatedList = projects.map(p => p.id === updatedProject.id ? updatedProject : p);
-    setProjects(updatedList);
+  const handleUpdateProject = async (updatedProject: Project) => {
+    // Optimistic Update
+    setProjects(projects.map(p => p.id === updatedProject.id ? updatedProject : p));
     if (selectedProject?.id === updatedProject.id) {
         setSelectedProject(updatedProject);
     }
-  };
-
-  const handleDeleteProject = (projectId: string) => {
-    if (window.confirm('Tem certeza que deseja excluir este projeto? Esta ação é irreversível.')) {
-        const updatedList = projects.filter(p => p.id !== projectId);
-        setProjects(updatedList);
-        handleBackToDashboard();
-        addToast('success', 'Projeto excluído.');
+    
+    try {
+        await api.saveProject(updatedProject);
+    } catch (e) {
+        addToast('error', 'Erro ao salvar alterações no servidor.');
+        await loadData(); // Revert
     }
   };
 
-  const handleSaveForm = (projectData: Project) => {
-    const exists = projects.find(p => p.id === projectData.id);
-    if (exists) {
-        handleUpdateProject(projectData);
-        setView('project-details'); 
-        addToast('success', 'Projeto atualizado com sucesso!');
-    } else {
-        setProjects([projectData, ...projects]);
-        setView('dashboard'); 
-        addToast('success', 'Novo projeto criado!');
+  const handleDeleteProject = async (projectId: string) => {
+    if (window.confirm('Tem certeza que deseja excluir este projeto? Esta ação é irreversível.')) {
+        try {
+            await api.deleteProject(projectId);
+            setProjects(projects.filter(p => p.id !== projectId));
+            handleBackToDashboard();
+            addToast('success', 'Projeto excluído.');
+        } catch (e) {
+            addToast('error', 'Erro ao excluir projeto.');
+        }
+    }
+  };
+
+  const handleSaveForm = async (projectData: Project) => {
+    try {
+        await api.saveProject(projectData);
+        await loadData(); // Reload to ensure sync
+        if (projects.find(p => p.id === projectData.id)) {
+            setView('project-details');
+            addToast('success', 'Projeto atualizado com sucesso!');
+            // Re-select if we were editing
+            setSelectedProject(projectData);
+        } else {
+            setView('dashboard');
+            addToast('success', 'Novo projeto criado!');
+        }
+    } catch (e) {
+        addToast('error', 'Erro ao salvar projeto.');
     }
   };
 
   // --- Render ---
+
+  if (authLoading) {
+      return (
+          <div className="min-h-screen flex items-center justify-center bg-gray-50 text-indigo-600">
+              <Loader2 className="animate-spin" size={48} />
+          </div>
+      );
+  }
 
   // Auth Views
   if (view === 'login') {

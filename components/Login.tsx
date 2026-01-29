@@ -84,12 +84,6 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, err
               </button>
             </p>
           </div>
-          
-          <div className="mt-4 p-4 bg-gray-50 rounded-lg text-xs text-gray-500 text-center">
-            <p className="font-semibold mb-1">Credenciais de Teste:</p>
-            <p>Admin: admin@dummy.com / 123</p>
-            <p>Editor: ana@dummy.com / 123</p>
-          </div>
         </div>
       </div>
     </div>
