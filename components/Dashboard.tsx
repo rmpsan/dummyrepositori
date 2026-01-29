@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Project, User, ProjectStatus } from '../types';
-import { Clock, Calendar, AlertCircle, TrendingUp, Search, LayoutGrid, Kanban as KanbanIcon, Filter } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { Project, User, ProjectStatus, TimeLog } from '../types';
+import { Clock, Calendar, AlertCircle, TrendingUp, Search, LayoutGrid, Kanban as KanbanIcon, Filter, AlertTriangle, CheckCircle2, MoreHorizontal, ArrowRight, Plus, Layers, PlayCircle } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
+import { QuickTimeLogModal } from './QuickTimeLogModal';
 
 interface DashboardProps {
   currentUser: User;
@@ -9,31 +10,47 @@ interface DashboardProps {
   users: User[];
   onSelectProject: (project: Project) => void;
   onNewProject: () => void;
+  onUpdateProject: (project: Project) => void;
 }
 
+// Visual Helpers
 const getStatusColor = (status: string) => {
   switch (status) {
-    case 'Em andamento': return 'text-blue-600 bg-blue-50 border-blue-200';
-    case 'Finalizado': return 'text-emerald-600 bg-emerald-50 border-emerald-200';
-    case 'Pausado': return 'text-amber-600 bg-amber-50 border-amber-200';
-    case 'Cancelado': return 'text-gray-600 bg-gray-50 border-gray-200';
+    case 'Em andamento': return 'text-blue-700 bg-blue-50 border-blue-100 ring-blue-500/20';
+    case 'Finalizado': return 'text-emerald-700 bg-emerald-50 border-emerald-100 ring-emerald-500/20';
+    case 'Pausado': return 'text-amber-700 bg-amber-50 border-amber-100 ring-amber-500/20';
+    case 'Cancelado': return 'text-gray-600 bg-gray-50 border-gray-100 ring-gray-500/20';
     default: return 'text-gray-600 bg-gray-50';
   }
 };
 
-const getHoursColor = (used: number, budget: number) => {
+const getHoursProgressColor = (used: number, budget: number) => {
   const percentage = (used / budget) * 100;
-  if (percentage >= 100) return 'bg-rose-500';
-  if (percentage >= 80) return 'bg-amber-500';
-  return 'bg-emerald-500';
+  if (percentage >= 100) return 'bg-gradient-to-r from-rose-500 to-red-600';
+  if (percentage >= 80) return 'bg-gradient-to-r from-amber-400 to-orange-500';
+  return 'bg-gradient-to-r from-emerald-400 to-emerald-600';
 };
 
-export const Dashboard: React.FC<DashboardProps> = ({ currentUser, projects, users, onSelectProject, onNewProject }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ currentUser, projects, users, onSelectProject, onNewProject, onUpdateProject }) => {
   const [viewMode, setViewMode] = useState<'grid' | 'kanban'>('grid');
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'Todos'>('Todos');
+  const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'Todos' | 'Criticos'>('Todos');
+  
+  const [isTimeModalOpen, setIsTimeModalOpen] = useState(false);
+  const [preSelectedTimeProject, setPreSelectedTimeProject] = useState<string | null>(null);
 
-  // Filtragem Lógica
+  const isAdmin = currentUser.role === 'admin';
+
+  // Lógica de Filtragem (Mantida igual)
+  const criticalProjects = useMemo(() => {
+    return projects.filter(p => {
+        if (p.status === 'Finalizado' || p.status === 'Cancelado') return false;
+        const isOverBudget = p.hoursUsed > p.hoursBudgeted;
+        const isOverdue = new Date(p.deadline) < new Date() && new Date(p.deadline).toDateString() !== new Date().toDateString();
+        return isOverBudget || isOverdue;
+    });
+  }, [projects]);
+
   const filteredProjects = useMemo(() => {
     let filtered = currentUser.role === 'admin' 
       ? projects 
@@ -47,339 +64,486 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, projects, use
       );
     }
 
-    if (statusFilter !== 'Todos') {
+    if (statusFilter === 'Criticos') {
+        filtered = filtered.filter(p => {
+            if (p.status === 'Finalizado' || p.status === 'Cancelado') return false;
+            return p.hoursUsed > p.hoursBudgeted || new Date(p.deadline) < new Date();
+        });
+    } else if (statusFilter !== 'Todos') {
       filtered = filtered.filter(p => p.status === statusFilter);
     }
 
     return filtered;
   }, [projects, currentUser, searchTerm, statusFilter]);
 
-  // Estatísticas
   const stats = useMemo(() => {
     return {
-      active: filteredProjects.filter(p => p.status === 'Em andamento').length,
-      critical: filteredProjects.filter(p => (p.hoursUsed / p.hoursBudgeted) > 0.9 && p.status !== 'Finalizado').length,
-      total: filteredProjects.length
+      active: projects.filter(p => p.status === 'Em andamento').length,
+      finished: projects.filter(p => p.status === 'Finalizado').length,
+      hoursTotal: projects.reduce((acc, p) => acc + p.hoursUsed, 0),
+      criticalCount: criticalProjects.length
     };
-  }, [filteredProjects]);
+  }, [projects, criticalProjects]);
 
-  // Dados do Gráfico
-  const chartData = filteredProjects.map(p => ({
-    name: p.name.length > 10 ? p.name.substring(0, 10) + '...' : p.name,
-    used: p.hoursUsed,
-    budget: p.hoursBudgeted
-  })).slice(0, 10); // Limita a 10 para não quebrar o gráfico visualmente
+  // Gráfico (Dados)
+  const chartData = filteredProjects
+    .filter(p => p.status === 'Em andamento')
+    .map(p => ({
+        name: p.name.length > 10 ? p.name.substring(0, 10) + '...' : p.name,
+        Utilizado: p.hoursUsed,
+        Restante: Math.max(0, p.hoursBudgeted - p.hoursUsed),
+        Estourado: Math.max(0, p.hoursUsed - p.hoursBudgeted),
+    }))
+    .sort((a, b) => (b.Utilizado + b.Restante) - (a.Utilizado + a.Restante))
+    .slice(0, 8);
+
+  const openTimeLogModal = (projectId?: string) => {
+      setPreSelectedTimeProject(projectId || null);
+      setIsTimeModalOpen(true);
+  };
+
+  const handleTimeLogSave = (updatedProject: Project, log: TimeLog) => {
+      onUpdateProject(updatedProject);
+  };
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 animate-in fade-in duration-500 pb-20">
       
-      {/* Header Section */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 border-b border-gray-200 pb-6">
+      {/* --- HEADER --- */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight">
-            Olá, {currentUser.name.split(' ')[0]}
+          <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">
+            Olá, <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">{currentUser.name.split(' ')[0]}</span>
           </h1>
-          <p className="text-gray-500 mt-1">Gerencie suas produções com eficiência máxima.</p>
+          <p className="text-slate-500 mt-2 text-lg font-medium">
+             {isAdmin 
+                ? 'Painel de controle geral da produtora.' 
+                : 'Seu workspace criativo de hoje.'}
+          </p>
         </div>
         
         <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-          {currentUser.role === 'admin' && (
+          {!isAdmin && (
+              <button 
+                onClick={() => openTimeLogModal()}
+                className="group px-6 py-3 bg-white text-indigo-600 font-bold rounded-xl hover:bg-indigo-50 border border-indigo-100 transition shadow-sm hover:shadow-md flex items-center justify-center gap-2 active:scale-95"
+              >
+                <Clock size={18} className="text-indigo-500 group-hover:scale-110 transition-transform" />
+                <span>Registrar Horas</span>
+              </button>
+          )}
+
+          {isAdmin && (
             <button 
               onClick={onNewProject}
-              className="px-5 py-2.5 bg-indigo-600 text-white font-medium rounded-xl hover:bg-indigo-700 transition shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 active:scale-95 transform duration-150"
+              className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-bold rounded-xl hover:shadow-lg hover:shadow-indigo-500/30 transition-all flex items-center justify-center gap-2 active:scale-95 hover:-translate-y-0.5"
             >
-              <span>+ Novo Projeto</span>
+              <Plus size={20} strokeWidth={3} />
+              <span>Novo Projeto</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      {/* --- KPI STATS --- */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
         <StatCard 
           title="Em Produção" 
           value={stats.active} 
-          icon={<TrendingUp size={22} />} 
-          color="blue" 
+          icon={<PlayCircle size={22} strokeWidth={2.5} />} 
+          variant="blue" 
+          onClick={() => setStatusFilter('Em andamento')}
+          isActive={statusFilter === 'Em andamento'}
         />
         <StatCard 
-          title="Atenção Necessária" 
-          value={stats.critical} 
-          icon={<AlertCircle size={22} />} 
-          color="red" 
+          title="Finalizados" 
+          value={stats.finished} 
+          icon={<CheckCircle2 size={22} strokeWidth={2.5} />} 
+          variant="emerald" 
+          onClick={() => setStatusFilter('Finalizado')}
+          isActive={statusFilter === 'Finalizado'}
         />
         <StatCard 
-          title="Projetos Totais" 
-          value={stats.total} 
-          icon={<LayoutGrid size={22} />} 
-          color="purple" 
+          title="Alertas / Atrasos" 
+          value={stats.criticalCount} 
+          icon={<AlertTriangle size={22} strokeWidth={2.5} />} 
+          variant="red" 
+          onClick={() => setStatusFilter('Criticos')}
+          isActive={statusFilter === 'Criticos'}
+        />
+        <StatCard 
+          title="Horas Totais" 
+          value={stats.hoursTotal} 
+          icon={<Clock size={22} strokeWidth={2.5} />} 
+          variant="purple" 
+          suffix="h"
         />
       </div>
 
-      {/* Admin Analytics */}
-      {currentUser.role === 'admin' && viewMode === 'grid' && (
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <div className="flex justify-between items-center mb-6">
-             <h3 className="text-lg font-semibold text-gray-800">Carga de Trabalho (Horas)</h3>
-          </div>
-          <div className="h-56 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }} barSize={32}>
-                <XAxis dataKey="name" fontSize={11} tickLine={false} axisLine={false} tick={{fill: '#9ca3af'}} />
-                <YAxis fontSize={11} tickLine={false} axisLine={false} tick={{fill: '#9ca3af'}} />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                  cursor={{ fill: '#f9fafb' }}
-                />
-                <Bar dataKey="used" name="Utilizado" stackId="a" radius={[0, 0, 4, 4]}>
-                  {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.used > entry.budget ? '#f43f5e' : '#6366f1'} />
-                  ))}
-                </Bar>
-                <Bar dataKey="budget" name="Orçamento Restante" stackId="a" fill="#e5e7eb" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* Filters & Controls */}
-      <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-2 rounded-xl border border-gray-100 shadow-sm">
-        <div className="flex items-center gap-2 w-full md:w-auto p-1">
-          <div className="relative w-full md:w-64">
-            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input 
-              type="text"
-              placeholder="Buscar cliente, projeto..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-transparent focus:bg-white focus:border-indigo-300 rounded-lg text-sm outline-none transition"
-            />
-          </div>
-          
-          <div className="relative hidden md:block">
-            <Filter size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <select 
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="pl-10 pr-8 py-2 bg-gray-50 border border-transparent focus:bg-white focus:border-indigo-300 rounded-lg text-sm outline-none appearance-none cursor-pointer hover:bg-gray-100 transition"
-            >
-              <option value="Todos">Todos Status</option>
-              <option value="Em andamento">Em andamento</option>
-              <option value="Pausado">Pausado</option>
-              <option value="Finalizado">Finalizado</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="flex bg-gray-100 p-1 rounded-lg">
-          <button 
-            onClick={() => setViewMode('grid')}
-            className={`p-2 rounded-md transition ${viewMode === 'grid' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-            title="Visualização em Grade"
-          >
-            <LayoutGrid size={18} />
-          </button>
-          <button 
-            onClick={() => setViewMode('kanban')}
-            className={`p-2 rounded-md transition ${viewMode === 'kanban' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-            title="Visualização em Quadro (Kanban)"
-          >
-            <KanbanIcon size={18} />
-          </button>
-        </div>
-      </div>
-
-      {/* Content View */}
-      {viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredProjects.map((project) => (
-            <ProjectCard key={project.id} project={project} users={users} onClick={() => onSelectProject(project)} />
-          ))}
-          {filteredProjects.length === 0 && (
-            <div className="col-span-full py-20 text-center text-gray-400">
-              <div className="mx-auto w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-                <Search size={24} />
-              </div>
-              <p>Nenhum projeto encontrado com os filtros atuais.</p>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="flex overflow-x-auto gap-6 pb-6 items-start h-[calc(100vh-350px)]">
-           <KanbanColumn 
-              title="Em Andamento" 
-              status="Em andamento" 
-              projects={filteredProjects.filter(p => p.status === 'Em andamento')} 
-              onSelect={onSelectProject} 
-            />
-           <KanbanColumn 
-              title="Pausado / Aguardando" 
-              status="Pausado" 
-              projects={filteredProjects.filter(p => p.status === 'Pausado')} 
-              onSelect={onSelectProject} 
-            />
-           <KanbanColumn 
-              title="Finalizado" 
-              status="Finalizado" 
-              projects={filteredProjects.filter(p => p.status === 'Finalizado')} 
-              onSelect={onSelectProject} 
-            />
-        </div>
-      )}
-    </div>
-  );
-};
-
-// --- Subcomponents ---
-
-interface StatCardProps {
-  title: string;
-  value: number;
-  icon: React.ReactNode;
-  color: 'blue' | 'red' | 'purple';
-}
-
-const StatCard: React.FC<StatCardProps> = ({ title, value, icon, color }) => {
-  const colors = {
-    blue: 'bg-blue-50 text-blue-600 border-blue-100',
-    red: 'bg-rose-50 text-rose-600 border-rose-100',
-    purple: 'bg-indigo-50 text-indigo-600 border-indigo-100'
-  };
-
-  return (
-    <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition duration-300">
-      <div>
-        <p className="text-sm text-gray-500 font-medium mb-1">{title}</p>
-        <p className="text-3xl font-bold text-gray-900">{value}</p>
-      </div>
-      <div className={`p-4 rounded-xl ${colors[color]}`}>
-        {icon}
-      </div>
-    </div>
-  );
-};
-
-interface ProjectCardProps {
-  project: Project;
-  users: User[];
-  onClick: () => void;
-}
-
-const ProjectCard: React.FC<ProjectCardProps> = ({ project, users, onClick }) => {
-  const hoursPercent = Math.min(100, (project.hoursUsed / project.hoursBudgeted) * 100);
-  
-  return (
-    <div 
-      onClick={onClick}
-      className="bg-white rounded-2xl shadow-sm border border-gray-100 hover:shadow-lg hover:border-indigo-100 transition duration-300 cursor-pointer flex flex-col justify-between group overflow-hidden"
-    >
-      <div className="p-6">
-        <div className="flex justify-between items-start mb-4">
-          <span className={`px-2.5 py-1 text-[10px] uppercase tracking-wider font-bold rounded-md border ${getStatusColor(project.status)}`}>
-            {project.status}
-          </span>
-          {project.priority === 'Urgente' && (
-            <span className="flex items-center text-rose-600 text-xs font-bold bg-rose-50 px-2 py-1 rounded-md">
-              <AlertCircle size={14} className="mr-1" /> URGENTE
-            </span>
-          )}
-        </div>
-
-        <h3 className="text-lg font-bold text-gray-900 leading-tight mb-1 group-hover:text-indigo-600 transition">{project.name}</h3>
-        <p className="text-sm text-gray-500 mb-6 font-medium">{project.client}</p>
-
-        <div className="space-y-4">
-          {/* Hours Progress */}
-          <div>
-            <div className="flex justify-between text-xs text-gray-500 mb-1.5 font-medium">
-              <span>{project.hoursUsed}h utilizadas</span>
-              <span>{Math.round(hoursPercent)}%</span>
-            </div>
-            <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
-              <div 
-                className={`h-2 rounded-full transition-all duration-500 ${getHoursColor(project.hoursUsed, project.hoursBudgeted)}`}
-                style={{ width: `${hoursPercent}%` }}
-              ></div>
-            </div>
-          </div>
-
-          {/* Next Deadline */}
-          <div className="flex items-center text-sm text-gray-600 bg-gray-50 p-3 rounded-xl border border-gray-100">
-            <div className="bg-white p-1.5 rounded-lg shadow-sm mr-3 text-indigo-500">
-              <Clock size={16} />
-            </div>
-            <div>
-              <span className="block text-[10px] uppercase text-gray-400 font-bold tracking-wide">Próxima Entrega</span>
-              <span className="font-semibold text-gray-800">V1: {new Date(project.versionDeadlines.v1).toLocaleDateString('pt-BR')}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-      
-      <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-100 flex justify-between items-center text-xs">
-        <span className="font-medium text-gray-500">{project.type}</span>
-        <div className="flex -space-x-2">
-            {project.editorIds.map(id => {
-              const user = users.find(u => u.id === id);
-              return (
-                <div key={id} className="w-7 h-7 rounded-full bg-white border-2 border-white flex items-center justify-center shadow-sm overflow-hidden" title={user?.name || 'Usuário removido'}>
-                   {user ? (
-                       <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-                   ) : (
-                       <div className="w-full h-full bg-gray-200 flex items-center justify-center text-[8px] text-gray-500">?</div>
-                   )}
+      {/* --- ADMIN ALERTS --- */}
+      {isAdmin && criticalProjects.length > 0 && (
+        <div className="bg-gradient-to-br from-rose-50 to-white border border-rose-100 rounded-2xl p-6 shadow-sm animate-in slide-in-from-top-2 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-rose-400/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+            <div className="relative z-10">
+                <div className="flex items-center gap-2 mb-4 text-rose-700">
+                    <div className="bg-rose-100 p-1.5 rounded-lg">
+                        <AlertTriangle className="text-rose-600" size={18} />
+                    </div>
+                    <h2 className="text-lg font-bold">Atenção Prioritária ({criticalProjects.length})</h2>
                 </div>
-              );
-            })}
-             {project.editorIds.length === 0 && <span className="text-gray-400 italic">Sem editor</span>}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {criticalProjects.map(p => {
+                        const isOverdue = new Date(p.deadline) < new Date();
+                        const isOverBudget = p.hoursUsed > p.hoursBudgeted;
+                        const overdueDays = Math.ceil((new Date().getTime() - new Date(p.deadline).getTime()) / (1000 * 3600 * 24));
+                        const budgetPercent = Math.round((p.hoursUsed / p.hoursBudgeted) * 100);
+
+                        return (
+                            <div key={p.id} onClick={() => onSelectProject(p)} className="bg-white/80 backdrop-blur-sm p-4 rounded-xl border border-rose-200 shadow-sm cursor-pointer hover:shadow-md hover:border-rose-300 transition group">
+                                <h3 className="font-bold text-slate-800 truncate mb-2 group-hover:text-rose-600 transition-colors">{p.name}</h3>
+                                <div className="flex flex-wrap gap-2">
+                                    {isOverdue && (
+                                        <span className="flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-1 rounded">
+                                            Atrasado ({overdueDays}d)
+                                        </span>
+                                    )}
+                                    {isOverBudget && (
+                                        <span className="flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-1 rounded">
+                                            Orçamento ({budgetPercent}%)
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
         </div>
+      )}
+
+      {/* --- MAIN CONTENT LAYOUT --- */}
+      <div className="grid grid-cols-1 gap-8">
+            {/* Toolbar */}
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-white/40 shadow-sm sticky top-4 z-20">
+                <div className="flex items-center gap-3 w-full md:w-auto px-2">
+                    <div className="relative w-full md:w-80 group">
+                        <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
+                        <input 
+                        type="text"
+                        placeholder="Buscar projeto, cliente..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-100/50 border border-transparent focus:bg-white focus:border-indigo-200 focus:ring-4 focus:ring-indigo-500/10 rounded-xl text-sm outline-none transition font-medium text-slate-700 placeholder:text-slate-400"
+                        />
+                    </div>
+                    
+                    <div className="relative hidden md:block group">
+                        <Filter size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
+                        <select 
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value as any)}
+                        className="pl-10 pr-10 py-2.5 bg-slate-100/50 border border-transparent focus:bg-white focus:border-indigo-200 focus:ring-4 focus:ring-indigo-500/10 rounded-xl text-sm outline-none appearance-none cursor-pointer hover:bg-white transition font-bold text-slate-600"
+                        >
+                        <option value="Todos">Todos os Status</option>
+                        <option value="Em andamento">Em andamento</option>
+                        <option value="Pausado">Pausado</option>
+                        <option value="Finalizado">Finalizado</option>
+                        {isAdmin && <option value="Criticos">⚠️ Apenas Críticos</option>}
+                        </select>
+                    </div>
+                </div>
+
+                <div className="flex bg-slate-100/80 p-1.5 rounded-xl border border-slate-200/50">
+                    <button 
+                        onClick={() => setViewMode('grid')}
+                        className={`p-2 rounded-lg transition-all duration-200 ${viewMode === 'grid' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                    >
+                        <LayoutGrid size={18} strokeWidth={2.5} />
+                    </button>
+                    <button 
+                        onClick={() => setViewMode('kanban')}
+                        className={`p-2 rounded-lg transition-all duration-200 ${viewMode === 'kanban' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                    >
+                        <KanbanIcon size={18} strokeWidth={2.5} />
+                    </button>
+                </div>
+            </div>
+
+            {/* --- ADMIN CHART --- */}
+            {isAdmin && viewMode === 'grid' && chartData.length > 0 && (
+                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+                    <div className="flex justify-between items-center mb-8">
+                        <div>
+                            <h3 className="text-lg font-bold text-slate-800">Carga de Trabalho</h3>
+                            <p className="text-slate-400 text-sm">Horas consumidas vs Orçamento</p>
+                        </div>
+                    </div>
+                    <div className="h-64 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }} barSize={12}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                            <XAxis dataKey="name" fontSize={11} tickLine={false} axisLine={false} tick={{fill: '#94A3B8', fontWeight: 500}} dy={10} />
+                            <YAxis fontSize={11} tickLine={false} axisLine={false} tick={{fill: '#94A3B8'}} />
+                            <Tooltip 
+                            cursor={{ fill: '#F8FAFC' }}
+                            contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', padding: '16px' }}
+                            itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                            />
+                            <Bar dataKey="Utilizado" stackId="a" fill="#6366F1" radius={[0, 0, 0, 0]} />
+                            <Bar dataKey="Restante" stackId="a" fill="#E2E8F0" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="Estourado" stackId="a" fill="#F43F5E" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+            )}
+
+            {/* --- PROJECTS GRID --- */}
+            {viewMode === 'grid' ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                {filteredProjects.map((project) => (
+                    <ProjectCard 
+                        key={project.id} 
+                        project={project} 
+                        users={users} 
+                        onClick={() => onSelectProject(project)}
+                        onQuickLog={() => openTimeLogModal(project.id)}
+                        canLogTime={!isAdmin || project.status === 'Em andamento'}
+                    />
+                ))}
+                
+                {filteredProjects.length === 0 && (
+                    <div className="col-span-full py-32 text-center">
+                        <div className="mx-auto w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-6 text-slate-300">
+                            <Search size={32} />
+                        </div>
+                        <h3 className="text-slate-900 font-bold text-lg mb-1">Nenhum projeto encontrado</h3>
+                        <p className="text-slate-500">Tente ajustar seus filtros de busca.</p>
+                    </div>
+                )}
+                </div>
+            ) : (
+                <div className="flex overflow-x-auto gap-6 pb-8 pt-2 px-2 items-start min-h-[500px]">
+                    <KanbanColumn 
+                        title="Em Produção" 
+                        status="Em andamento" 
+                        projects={filteredProjects.filter(p => p.status === 'Em andamento')} 
+                        onSelect={onSelectProject} 
+                        variant="blue"
+                    />
+                    <KanbanColumn 
+                        title="Pausado / Aguardando" 
+                        status="Pausado" 
+                        projects={filteredProjects.filter(p => p.status === 'Pausado')} 
+                        onSelect={onSelectProject} 
+                        variant="amber"
+                    />
+                    <KanbanColumn 
+                        title="Finalizado" 
+                        status="Finalizado" 
+                        projects={filteredProjects.filter(p => p.status === 'Finalizado')} 
+                        onSelect={onSelectProject} 
+                        variant="emerald"
+                    />
+                </div>
+            )}
       </div>
+
+      <QuickTimeLogModal 
+        isOpen={isTimeModalOpen}
+        onClose={() => setIsTimeModalOpen(false)}
+        projects={projects}
+        currentUser={currentUser}
+        onSave={handleTimeLogSave}
+        preSelectedProjectId={preSelectedTimeProject}
+      />
     </div>
   );
 };
 
-interface KanbanColumnProps {
-  title: string;
-  status: string;
-  projects: Project[];
-  onSelect: (p: Project) => void;
-}
+// --- Subcomponents Visuals ---
 
-const KanbanColumn: React.FC<KanbanColumnProps> = ({ title, status, projects, onSelect }) => {
-  return (
-    <div className="min-w-[320px] w-full max-w-sm flex flex-col h-full">
-      <div className="flex items-center justify-between mb-4 px-1">
-        <h3 className="font-bold text-gray-700 flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${
-            status === 'Em andamento' ? 'bg-blue-500' : 
-            status === 'Finalizado' ? 'bg-emerald-500' : 'bg-amber-500'
-          }`}></span>
-          {title}
-        </h3>
-        <span className="bg-gray-200 text-gray-600 text-xs font-bold px-2 py-0.5 rounded-full">{projects.length}</span>
-      </div>
-      
-      <div className="bg-gray-100/50 p-2 rounded-xl border border-gray-200/50 flex-1 overflow-y-auto space-y-3">
-        {projects.map(p => (
-          <div key={p.id} onClick={() => onSelect(p)} className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 cursor-pointer hover:shadow-md hover:border-indigo-300 transition group">
-            <div className="flex justify-between items-start mb-2">
-               <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{p.client}</span>
-               {p.priority === 'Urgente' && <div className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></div>}
+const StatCard: React.FC<{
+    title: string;
+    value: number;
+    icon: React.ReactNode;
+    variant: 'blue' | 'red' | 'purple' | 'emerald';
+    suffix?: string;
+    onClick?: () => void;
+    isActive?: boolean;
+}> = ({ title, value, icon, variant, suffix = '', onClick, isActive }) => {
+    
+    const variants = {
+        blue: 'from-blue-500 to-indigo-600 shadow-blue-500/20',
+        red: 'from-rose-500 to-red-600 shadow-rose-500/20',
+        emerald: 'from-emerald-400 to-emerald-600 shadow-emerald-500/20',
+        purple: 'from-violet-500 to-purple-600 shadow-purple-500/20'
+    };
+
+    const bgStyles = isActive 
+        ? `bg-gradient-to-br ${variants[variant]} text-white transform scale-[1.02]` 
+        : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-100 hover:border-slate-200';
+
+    const iconStyles = isActive ? 'text-white/90 bg-white/20' : `text-${variant === 'purple' ? 'violet' : variant}-600 bg-${variant === 'purple' ? 'violet' : variant}-50`;
+    
+    const textStyles = isActive ? 'text-white/80' : 'text-slate-400';
+    const valueStyles = isActive ? 'text-white' : 'text-slate-900';
+
+    return (
+        <div 
+            onClick={onClick}
+            className={`p-6 rounded-3xl transition-all duration-300 shadow-lg cursor-pointer flex flex-col justify-between h-full ${bgStyles} ${!isActive ? 'shadow-slate-200/50' : ''}`}
+        >
+            <div className="flex justify-between items-start mb-4">
+                <p className={`text-xs font-bold uppercase tracking-wider ${textStyles}`}>{title}</p>
+                <div className={`p-2.5 rounded-xl ${iconStyles}`}>
+                    {icon}
+                </div>
             </div>
-            <h4 className="font-bold text-gray-800 mb-2 leading-tight group-hover:text-indigo-600">{p.name}</h4>
-            <div className="flex items-center gap-2 text-xs text-gray-500 mt-3 pt-3 border-t border-gray-50">
-               <Calendar size={12} />
-               <span>{new Date(p.deadline).toLocaleDateString('pt-BR', {day: '2-digit', month: 'short'})}</span>
+            <p className={`text-3xl font-extrabold tracking-tight ${valueStyles}`}>{value}{suffix}</p>
+        </div>
+    );
+};
+
+const ProjectCard: React.FC<{
+    project: Project;
+    users: User[];
+    onClick: () => void;
+    onQuickLog: () => void;
+    canLogTime: boolean;
+}> = ({ project, users, onClick, onQuickLog, canLogTime }) => {
+    
+    const hoursPercent = Math.min(100, (project.hoursUsed / project.hoursBudgeted) * 100);
+    const isOverdue = new Date(project.deadline) < new Date() && project.status !== 'Finalizado';
+    
+    return (
+        <div 
+            className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 hover:shadow-xl hover:shadow-slate-200/50 hover:-translate-y-1 transition-all duration-300 group relative flex flex-col h-full"
+        >
+            <div className="cursor-pointer flex-1" onClick={onClick}>
+                <div className="flex justify-between items-start mb-4">
+                    <span className={`px-3 py-1.5 text-[10px] uppercase tracking-wider font-bold rounded-lg border shadow-sm ring-1 ${getStatusColor(project.status)}`}>
+                        {project.status}
+                    </span>
+                    {project.priority === 'Urgente' && !isOverdue && (
+                        <span className="bg-rose-50 text-rose-600 px-2 py-1 rounded-md text-[10px] font-bold border border-rose-100">URGENTE</span>
+                    )}
+                </div>
+
+                <div className="mb-6">
+                    <h3 className="text-lg font-bold text-slate-900 leading-tight mb-1 group-hover:text-indigo-600 transition-colors line-clamp-2" title={project.name}>{project.name}</h3>
+                    <p className="text-sm text-slate-500 font-medium truncate">{project.client}</p>
+                </div>
+
+                {/* Progress Bar styled like a video timeline */}
+                <div className="mb-5">
+                    <div className="flex justify-between text-xs font-bold text-slate-500 mb-2">
+                        <span>Timeline / Horas</span>
+                        <span className={project.hoursUsed > project.hoursBudgeted ? 'text-rose-500' : 'text-emerald-600'}>{Math.round(hoursPercent)}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden relative">
+                         {/* Tick marks to look like timeline */}
+                        <div className="absolute inset-0 flex justify-between px-1">
+                            {[...Array(5)].map((_, i) => <div key={i} className="w-[1px] h-full bg-white/50 z-10"></div>)}
+                        </div>
+                        <div 
+                            className={`h-2 rounded-full transition-all duration-700 ${getHoursProgressColor(project.hoursUsed, project.hoursBudgeted)}`}
+                            style={{ width: `${hoursPercent}%` }}
+                        ></div>
+                    </div>
+                    <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-medium">
+                        <span>0h</span>
+                        <span>{project.hoursBudgeted}h</span>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-100 group-hover:bg-indigo-50/50 group-hover:border-indigo-100 transition-colors">
+                     <div className="bg-white p-2 rounded-xl shadow-sm text-indigo-500">
+                        <Calendar size={16} />
+                     </div>
+                     <div>
+                        <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Próxima Entrega</p>
+                        <p className={`text-sm font-bold ${isOverdue ? 'text-rose-600' : 'text-slate-700'}`}>
+                            {new Date(project.versionDeadlines.v1).toLocaleDateString('pt-BR', {day: '2-digit', month: 'short'})}
+                            {isOverdue && ' (!)'}
+                        </p>
+                     </div>
+                </div>
             </div>
-          </div>
-        ))}
-        {projects.length === 0 && (
-           <div className="text-center py-10 text-gray-400 text-sm italic">
-             Nenhum projeto
-           </div>
-        )}
-      </div>
-    </div>
-  );
+
+            <div className="mt-6 pt-4 border-t border-slate-100 flex justify-between items-center">
+                 <div className="flex -space-x-3">
+                    {project.editorIds.slice(0, 3).map(id => {
+                        const user = users.find(u => u.id === id);
+                        return (
+                            <div key={id} className="w-8 h-8 rounded-full border-2 border-white bg-slate-200 shadow-sm overflow-hidden" title={user?.name}>
+                                {user ? <img src={user.avatar} className="w-full h-full object-cover" /> : null}
+                            </div>
+                        )
+                    })}
+                 </div>
+
+                 {canLogTime && (
+                     <button 
+                        onClick={(e) => { e.stopPropagation(); onQuickLog(); }}
+                        className="w-9 h-9 flex items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all shadow-sm hover:shadow-indigo-200"
+                        title="Registrar horas"
+                     >
+                         <Plus size={18} strokeWidth={3} />
+                     </button>
+                 )}
+            </div>
+        </div>
+    );
+};
+
+const KanbanColumn: React.FC<{
+    title: string;
+    status: string;
+    projects: Project[];
+    onSelect: (p: Project) => void;
+    variant: 'blue' | 'amber' | 'emerald';
+}> = ({ title, status, projects, onSelect, variant }) => {
+    
+    const colors = {
+        blue: 'bg-blue-500',
+        amber: 'bg-amber-500',
+        emerald: 'bg-emerald-500'
+    };
+
+    const headerColors = {
+        blue: 'bg-blue-50 border-blue-100 text-blue-700',
+        amber: 'bg-amber-50 border-amber-100 text-amber-700',
+        emerald: 'bg-emerald-50 border-emerald-100 text-emerald-700'
+    };
+
+    return (
+        <div className="min-w-[320px] max-w-sm flex flex-col h-full bg-slate-100/50 rounded-3xl p-2 border border-slate-200/60">
+            <div className={`p-4 rounded-2xl mb-2 flex justify-between items-center border ${headerColors[variant]}`}>
+                <h3 className="font-bold flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${colors[variant]}`}></span>
+                    {title}
+                </h3>
+                <span className="bg-white/50 px-2 py-0.5 rounded-md text-xs font-bold">{projects.length}</span>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto space-y-3 px-1 pb-2 custom-scrollbar">
+                {projects.map(p => (
+                    <div key={p.id} onClick={() => onSelect(p)} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 cursor-pointer hover:shadow-md hover:border-indigo-300 hover:-translate-y-0.5 transition-all group">
+                         <div className="flex justify-between items-start mb-2">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate max-w-[150px]">{p.client}</span>
+                            {p.hoursUsed > p.hoursBudgeted && <AlertTriangle size={14} className="text-amber-500" />}
+                        </div>
+                        <h4 className="font-bold text-slate-800 mb-3 leading-tight group-hover:text-indigo-600">{p.name}</h4>
+                        <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                             <div 
+                                className={`h-1.5 rounded-full ${getHoursProgressColor(p.hoursUsed, p.hoursBudgeted)}`}
+                                style={{ width: `${Math.min(100, (p.hoursUsed / p.hoursBudgeted) * 100)}%` }}
+                             ></div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
 };

@@ -6,17 +6,25 @@ import { Project, User } from '../types';
 export const api = {
   // Auth & Profiles
   async getCurrentUser() {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user) return null;
+    // Check session explicitly to catch API Key errors
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    
+    if (sessionError) {
+        // Propagate error (e.g., Invalid API key) to be caught by App.tsx
+        throw sessionError;
+    }
+    
+    if (!sessionData.session?.user) return null;
     
     // Fetch profile details
     const { data: profile, error } = await supabase
       .from('profiles')
       .select('*')
-      .eq('id', session.user.id)
+      .eq('id', sessionData.session.user.id)
       .single();
 
     if (error) {
+        // If profile doesn't exist yet (race condition on signup), try to create default or return null
         console.warn('Error fetching profile:', error.message);
         return null;
     }
@@ -34,7 +42,6 @@ export const api = {
   },
 
   async createUserProfile(user: User) {
-    // Remove password if present before inserting to profiles
     const { password, ...profileData } = user;
     
     const { error } = await supabase
@@ -44,7 +51,6 @@ export const api = {
   },
 
   async updateUserProfile(userId: string, updates: Partial<User>) {
-      // Remove password from profile update as it's handled by Auth
       const { password, ...cleanUpdates } = updates as any; 
       
       const { error } = await supabase
@@ -65,9 +71,20 @@ export const api = {
 
     if (error) throw error;
 
-    // Map DB snake_case to Types camelCase and provide defaults
     return data.map((p: any) => ({
-      ...p,
+      id: p.id,
+      name: p.name,
+      client: p.client,
+      type: p.type,
+      structure: p.structure,
+      status: p.status,
+      priority: p.priority,
+      description: p.description,
+      
+      startDate: p.start_date || new Date().toISOString(),
+      deadline: p.deadline || new Date().toISOString(),
+      
+      // JSON fields might return null if empty in DB
       versionDeadlines: p.version_deadlines || { v1: '', final: '' },
       hoursBudgeted: p.hours_budgeted || 0,
       hoursUsed: p.hours_used || 0,
@@ -75,13 +92,11 @@ export const api = {
       deliverables: p.deliverables || [],
       comments: p.comments || [],
       timeLogs: p.time_logs || [],
-      startDate: p.start_date || new Date().toISOString(),
-      deadline: p.deadline || new Date().toISOString(),
     })) as Project[];
   },
 
   async saveProject(project: Project) {
-    // Map UI Type to DB Columns
+    // Ensure we are sending data that matches Supabase column expectations
     const dbProject = {
       id: project.id,
       name: project.name,
@@ -91,8 +106,11 @@ export const api = {
       status: project.status,
       priority: project.priority,
       description: project.description,
-      start_date: project.startDate,
-      deadline: project.deadline,
+      
+      start_date: project.startDate, // Needs to be ISO string or YYYY-MM-DD
+      deadline: project.deadline,     // Needs to be ISO string or YYYY-MM-DD
+      
+      // Map camelCase to snake_case for DB columns
       version_deadlines: project.versionDeadlines,
       hours_budgeted: project.hoursBudgeted,
       hours_used: project.hoursUsed,
@@ -106,7 +124,10 @@ export const api = {
       .from('projects')
       .upsert(dbProject);
 
-    if (error) throw error;
+    if (error) {
+        console.error("Supabase Save Error:", error);
+        throw error;
+    }
   },
 
   async deleteProject(projectId: string) {
@@ -119,7 +140,6 @@ export const api = {
   },
 
   async deleteUser(userId: string) {
-      // Note: Only deletes the profile.
       const { error } = await supabase
           .from('profiles')
           .delete()

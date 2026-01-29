@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Film, Mail, Lock, ArrowRight } from 'lucide-react';
+import { Film, Mail, Lock, ArrowRight, Clapperboard } from 'lucide-react';
 
 interface LoginProps {
   onLogin: (email: string, pass: string) => void;
@@ -17,48 +17,62 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, err
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
-        <div className="bg-slate-900 p-8 text-center">
-          <div className="w-12 h-12 bg-indigo-500 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30 mx-auto mb-4">
-            <Film size={28} className="text-white" />
+    <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
+      {/* Cinematic Background */}
+      <div 
+        className="absolute inset-0 z-0 bg-cover bg-center"
+        style={{ 
+          backgroundImage: 'url("https://images.unsplash.com/photo-1536240478700-b869070f9279?ixlib=rb-4.0.3&auto=format&fit=crop&w=2600&q=80")',
+        }}
+      >
+        <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-[2px]"></div>
+      </div>
+
+      <div className="relative z-10 w-full max-w-md px-4">
+        <div className="text-center mb-8 animate-in slide-in-from-bottom-8 duration-700">
+           <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-2xl flex items-center justify-center shadow-2xl shadow-indigo-500/40 mx-auto mb-6 transform rotate-3">
+            <Clapperboard size={32} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-1">Bem-vindo de volta</h1>
-          <p className="text-slate-400 text-sm">Acesse o Dummy Filmes Manager</p>
+          <h1 className="text-4xl font-extrabold text-white tracking-tight mb-2">Dummy Filmes</h1>
+          <p className="text-indigo-200 font-medium">Production Management System</p>
         </div>
 
-        <div className="p-8">
+        <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-8 shadow-2xl animate-in fade-in zoom-in-95 duration-500">
+          <div className="mb-6 text-center">
+            <h2 className="text-xl font-bold text-white">Bem-vindo de volta</h2>
+          </div>
+
           {error && (
-            <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100 flex items-center justify-center">
+            <div className="mb-6 p-4 bg-rose-500/20 text-rose-100 text-sm font-medium rounded-xl border border-rose-500/30 flex items-center justify-center backdrop-blur-sm">
               {error}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <div className="relative">
-                <Mail size={18} className="absolute left-3 top-3 text-gray-400" />
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-indigo-200 uppercase tracking-wider ml-1">Email</label>
+              <div className="relative group">
+                <Mail size={18} className="absolute left-4 top-3.5 text-indigo-300 group-focus-within:text-white transition-colors" />
                 <input 
                   type="email" 
                   required
-                  placeholder="seu@email.com"
-                  className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
+                  placeholder="editor@dummy.com"
+                  className="w-full pl-11 pr-4 py-3.5 bg-slate-900/40 border border-white/10 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition text-white placeholder:text-slate-500"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Senha</label>
-              <div className="relative">
-                <Lock size={18} className="absolute left-3 top-3 text-gray-400" />
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-indigo-200 uppercase tracking-wider ml-1">Senha</label>
+              <div className="relative group">
+                <Lock size={18} className="absolute left-4 top-3.5 text-indigo-300 group-focus-within:text-white transition-colors" />
                 <input 
                   type="password" 
                   required
                   placeholder="••••••••"
-                  className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
+                  className="w-full pl-11 pr-4 py-3.5 bg-slate-900/40 border border-white/10 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition text-white placeholder:text-slate-500"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
@@ -67,24 +81,26 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onNavigateToRegister, err
 
             <button 
               type="submit" 
-              className="w-full bg-indigo-600 text-white font-bold py-3 rounded-lg hover:bg-indigo-700 transition shadow-md hover:shadow-lg flex items-center justify-center gap-2 group"
+              className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/50 hover:-translate-y-0.5 active:translate-y-0 flex items-center justify-center gap-2 group mt-2"
             >
-              Entrar <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
+              Acessar Painel <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
             </button>
           </form>
 
-          <div className="mt-6 text-center pt-6 border-t border-gray-100">
-            <p className="text-gray-500 text-sm">
-              Não tem uma conta?{' '}
+          <div className="mt-8 text-center pt-6 border-t border-white/10">
+            <p className="text-slate-300 text-sm">
+              Não tem acesso?{' '}
               <button 
                 onClick={onNavigateToRegister}
-                className="text-indigo-600 font-semibold hover:text-indigo-700 transition hover:underline"
+                className="text-white font-bold hover:text-indigo-300 transition hover:underline decoration-2 underline-offset-4"
               >
-                Cadastre-se
+                Solicitar conta
               </button>
             </p>
           </div>
         </div>
+        
+        <p className="text-center text-slate-500 text-xs mt-8">© 2024 Dummy Filmes. Todos os direitos reservados.</p>
       </div>
     </div>
   );

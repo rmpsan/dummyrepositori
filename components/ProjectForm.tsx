@@ -9,6 +9,17 @@ interface ProjectFormProps {
   onCancel: () => void;
 }
 
+// UUID Generator helper for Supabase compatibility
+const generateUUID = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 export const ProjectForm: React.FC<ProjectFormProps> = ({ project, users, onSave, onCancel }) => {
   const isEditing = !!project;
 
@@ -39,15 +50,15 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({ project, users, onSave
     if (project) {
       setFormData({
         ...project,
-        startDate: project.startDate.split('T')[0],
-        deadline: project.deadline.split('T')[0],
+        startDate: project.startDate ? project.startDate.split('T')[0] : '',
+        deadline: project.deadline ? project.deadline.split('T')[0] : '',
         versionDeadlines: {
-          v1: project.versionDeadlines.v1.split('T')[0],
-          v2: project.versionDeadlines.v2 ? project.versionDeadlines.v2.split('T')[0] : '',
-          final: project.versionDeadlines.final.split('T')[0],
+          v1: project.versionDeadlines?.v1 ? project.versionDeadlines.v1.split('T')[0] : '',
+          v2: project.versionDeadlines?.v2 ? project.versionDeadlines.v2.split('T')[0] : '',
+          final: project.versionDeadlines?.final ? project.versionDeadlines.final.split('T')[0] : '',
         }
       });
-      setTempDeliverables(project.deliverables);
+      setTempDeliverables(project.deliverables || []);
       
       // Extract unique groups if Course
       if (project.structure === 'Curso') {
@@ -130,7 +141,8 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({ project, users, onSave
     })) as Deliverable[];
 
     const finalProject: Project = {
-      id: project?.id || `p${Date.now()}`,
+      // Use UUID if new project
+      id: project?.id || generateUUID(),
       name: formData.name!,
       client: formData.client!,
       type: formData.type!,
