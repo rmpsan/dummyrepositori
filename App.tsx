@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Project, User, Role, ToastNotification } from './types';
 import { Dashboard } from './components/Dashboard';
 import { ProjectDetails } from './components/ProjectDetails';
@@ -29,59 +29,70 @@ const App: React.FC = () => {
 
   // Config Error State
   const [isConfigError, setIsConfigError] = useState(false);
+  
+  // Ref to track mounting state
+  const isMounted = useRef(true);
 
   useEffect(() => {
+    isMounted.current = true;
+
     const initSession = async () => {
       try {
+        // 1. Check active session from Supabase
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
         if (sessionError) throw sessionError;
 
         if (session?.user) {
+          // 2. Fetch user profile from DB
           const user = await api.getCurrentUser();
-          if (user) {
+          
+          if (user && isMounted.current) {
             setCurrentUser(user);
             setView('dashboard');
+            // 3. Load initial data
             await loadData();
+          } else if (isMounted.current) {
+            // Session exists but profile not found (data integrity issue)
+            console.warn("Session found but profile missing. Signing out.");
+            await supabase.auth.signOut();
           }
         }
       } catch (err: any) {
         console.error("Auth Init Error:", err);
-        // Detect Invalid API Key
-        if (err.message && (err.message.includes('Invalid API key') || err.message.includes('configuration'))) {
-            setIsConfigError(true);
+        if (isMounted.current) {
+            if (err.message && (err.message.includes('Invalid API key') || err.message.includes('configuration'))) {
+                setIsConfigError(true);
+            }
         }
       } finally {
-        setAuthLoading(false);
+        if (isMounted.current) {
+            setAuthLoading(false);
+        }
       }
     };
 
     initSession();
 
+    // Listen for auth changes (SignIn, SignOut)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted.current) return;
+
       if (event === 'SIGNED_OUT') {
         setCurrentUser(null);
         setView('login');
         setProjects([]);
         setUsers([]);
-      } else if (event === 'SIGNED_IN' && session) {
-        // Only fetch if we don't have a user yet to avoid double fetch
-        if (!currentUser) {
-            try {
-                const user = await api.getCurrentUser();
-                if (user) {
-                    setCurrentUser(user);
-                    setView('dashboard');
-                    await loadData();
-                }
-            } catch (e) {
-                console.error(e);
-            }
-        }
-      }
+      } 
+      // Note: We intentionally handle initial load in initSession() to avoid race conditions.
+      // However, if a user logs in via the form, we can handle the state update there or let this listener catch it.
+      // For simplicity, Login component handles the immediate transition, and this listener acts as a backup/sync.
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted.current = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const loadData = async () => {
@@ -90,15 +101,14 @@ const App: React.FC = () => {
         api.getProjects(),
         api.getUsers()
       ]);
-      setProjects(fetchedProjects);
-      setUsers(fetchedUsers);
+      if (isMounted.current) {
+        setProjects(fetchedProjects);
+        setUsers(fetchedUsers);
+      }
     } catch (error: any) {
-      console.error(error);
-      if (error.message?.includes('Invalid API key')) {
+      console.error("Data Load Error:", error);
+      if (error.message?.includes('Invalid API key') && isMounted.current) {
         setIsConfigError(true);
-      } else {
-        // Don't show toast on initial load error if it's just empty
-        console.warn('Erro ao carregar dados iniciais');
       }
     }
   };
@@ -114,14 +124,25 @@ const App: React.FC = () => {
 
   const handleLogin = async (email: string, pass: string) => {
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password: pass,
       });
 
       if (error) throw error;
-      // onAuthStateChange will handle the rest
-      addToast('success', 'Login realizado com sucesso!');
+      
+      if (data.user) {
+          // Manually trigger fetch to ensure UI updates immediately
+          const user = await api.getCurrentUser();
+          if (user) {
+              setCurrentUser(user);
+              setView('dashboard');
+              await loadData();
+              addToast('success', 'Login realizado com sucesso!');
+          } else {
+              throw new Error("Perfil de usuário não encontrado.");
+          }
+      }
     } catch (error: any) {
       if (error.message?.includes('Invalid API key')) {
           setIsConfigError(true);
@@ -151,7 +172,10 @@ const App: React.FC = () => {
         };
         
         await api.createUserProfile(newUser);
+        
+        // Auto-login flow after registration if needed, or just show success
         addToast('success', 'Conta criada! Você já pode entrar.');
+        setView('login');
       }
     } catch (error: any) {
       if (error.message?.includes('Invalid API key')) {
@@ -166,15 +190,10 @@ const App: React.FC = () => {
   const handleLogout = async () => {
     try {
         await supabase.auth.signOut();
+        // State cleanup handled by onAuthStateChange
+        addToast('info', 'Você saiu do sistema.');
     } catch (error) {
         console.error("Error signing out:", error);
-    } finally {
-        // Force state cleanup immediately
-        setCurrentUser(null);
-        setView('login');
-        setProjects([]);
-        setUsers([]);
-        addToast('info', 'Você saiu do sistema.');
     }
   };
 
@@ -312,8 +331,9 @@ const App: React.FC = () => {
 
   if (authLoading) {
       return (
-          <div className="min-h-screen flex items-center justify-center bg-slate-900 text-indigo-500">
+          <div className="min-h-screen flex items-center justify-center bg-slate-900 text-indigo-500 flex-col gap-4">
               <Loader2 className="animate-spin" size={48} />
+              <p className="text-slate-400 text-sm font-medium animate-pulse">Carregando estúdio...</p>
           </div>
       );
   }
