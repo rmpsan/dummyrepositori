@@ -227,10 +227,18 @@ export const ProjectForm: React.FC<ProjectFormProps> = ({ project, users, onSave
                             onChange={e => setFormData({...formData, type: e.target.value})}
                         >
                             <option>Institucional</option>
+                            <option>Publicidade / Comercial</option>
+                            <option>Social Media (Reels/TikTok)</option>
+                            <option>YouTube / Vlog</option>
+                            <option>Podcast / Videocast</option>
+                            <option>Live / Streaming</option>
                             <option>Educacional / Curso</option>
-                            <option>Publicidade</option>
-                            <option>Social Media</option>
                             <option>Videoclipe</option>
+                            <option>Documentário</option>
+                            <option>Cobertura de Eventos</option>
+                            <option>Animação / Motion</option>
+                            <option>Vídeo de Vendas (VSL)</option>
+                            <option>Outros</option>
                         </select>
                     </div>
                     <div>
